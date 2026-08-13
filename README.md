@@ -10,12 +10,12 @@ This is a native Cordis plugin on dsh's typed interception points, not a shell-h
 ## Install
 
 ```sh
-dsh plugin --profile <your-profile> add github:agentic-control-plane/dsh-acp-plugin
+dsh plugin --profile <your-profile> add dsh-plugin-acp
 export ACP_BEARER_TOKEN=gsk_...   # or keep it in ~/.acp/credentials
 dsh --profile <your-profile>
 ```
 
-No build step, no dependencies, plain ESM — the git install needs no build allowance, and `dsh plugin add dsh-plugin-acp` works the same once the npm package is up.
+No build step, no dependencies, plain ESM. Installing from git works too (`dsh plugin add github:agentic-control-plane/dsh-acp-plugin`) and needs no build allowance.
 
 Get a key at [cloud.agenticcontrolplane.com](https://cloud.agenticcontrolplane.com). No key? The plugin says so loudly and stays out of the way — it never bricks a session.
 
