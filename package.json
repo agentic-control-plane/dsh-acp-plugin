@@ -1,15 +1,28 @@
 {
   "name": "dsh-plugin-acp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agentic Control Plane for DeepSeek Harness — check every tool call against your policies before it runs, and keep a durable record of what was allowed and why.",
   "type": "module",
   "main": "index.js",
-  "files": ["index.js", "cordis.patch.yml"],
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
   "scripts": {
     "test": "node --test test/"
   },
-  "keywords": ["dsh-plugin", "deepseek-harness", "agentic-control-plane", "agent-security", "tool-call-policy"],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "agentic-control-plane",
+    "agent-security",
+    "tool-call-policy"
+  ],
   "repository": "github:agentic-control-plane/dsh-acp-plugin",
   "license": "MIT",
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }
