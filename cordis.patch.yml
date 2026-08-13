@@ -1,0 +1,8 @@
+# Applied when a profile lists this bundle: mounts the ACP policy check on
+# the tool-execution pipeline (tools/pre-execute + tools/post-execute).
+# Credentials come from the environment (ACP_BEARER_TOKEN) or
+# ~/.acp/credentials; override this row's config in your profile's
+# cordis.patch.yml to pin governBase, agentTier, or timeoutMs.
+- insert:
+    - id: acp
+      name: dsh-plugin-acp
