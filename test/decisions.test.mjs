@@ -147,6 +147,39 @@ test('post-execute block turns the result into corrective feedback', async () =>
   server.close()
 })
 
+test('a transport failure is retried once before the fail posture (#690)', async () => {
+  // First request stalls past the budget, second answers immediately —
+  // the confirmed shape of the incident: a slow ALLOW became a deny.
+  let n = 0
+  const server = createServer((req, res) => {
+    n += 1
+    const delay = n === 1 ? 400 : 0
+    setTimeout(() => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ decision: 'allow' }))
+    }, delay)
+  })
+  const base = await new Promise(r => server.listen(0, '127.0.0.1', () =>
+    r(`http://127.0.0.1:${server.address().port}`)))
+  const ctx = fakeCtx()
+  const pre = mount(ctx, { governBase: base, agentTier: 'background', timeoutMs: 120 })['tools/pre-execute']
+  const decision = await pre(EXEC, async () => ({ kind: 'allow' }))
+  assert.equal(decision.kind, 'allow', 'the retry must rescue a slow-but-successful answer')
+  assert.equal(n, 2, 'exactly two attempts')
+  server.close()
+})
+
+test('an HTTP status is never retried (a 429 must not be re-rolled)', async () => {
+  let n = 0
+  const { server, base } = await stubGateway(() => { n += 1; return { status: 429, json: {} } })
+  const ctx = fakeCtx()
+  const pre = mount(ctx, { governBase: base, agentTier: 'background' })['tools/pre-execute']
+  const decision = await pre(EXEC, async () => ({ kind: 'allow' }))
+  assert.equal(decision.kind, 'deny')
+  assert.equal(n, 1, 'the server answered — do not retry')
+  server.close()
+})
+
 test('post-execute outage is silent pass-through (the call already ran)', async () => {
   const ctx = fakeCtx()
   const post = mount(ctx, { governBase: 'http://127.0.0.1:1', agentTier: 'interactive' })['tools/post-execute']

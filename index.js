@@ -28,7 +28,7 @@ import { join } from 'node:path'
 
 export const name = 'acp'
 
-export const PLUGIN_VERSION = '0.1.1'
+export const PLUGIN_VERSION = '0.1.2'
 
 /** 200 KB ceiling on tool output sent for post-hoc scanning (matches the backend). */
 const POST_HOOK_PAYLOAD_CEILING = 200 * 1024
@@ -103,7 +103,14 @@ export function apply(ctx, config = {}) {
       const res = await fetch(`${govern}${path}`, {
         method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal,
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`)
+      if (!res.ok) {
+        // Tagged so the pre-execute retry can tell "the server answered with
+        // a status" from "the request never landed". Re-rolling a 429 would
+        // deepen the rate limit it is reporting.
+        const err = new Error(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`)
+        err.httpStatus = res.status
+        throw err
+      }
       return await res.json()
     } finally {
       clearTimeout(timer)
@@ -127,7 +134,19 @@ export function apply(ctx, config = {}) {
   ctx.on('tools/pre-execute', async (exec, next) => {
     let data
     try {
-      data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse'), exec.signal)
+      try {
+        data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse'), exec.signal)
+      } catch (first) {
+        // Retry once before applying the fail posture (gatewaystack-connect#690).
+        // A confirmed incident on the Claude Code plugin: the gateway answered
+        // HTTP 200 — an allow — at 4.635s, after the client had aborted at 4s,
+        // and the unattended tier turned that allow into a deny. The slow
+        // answers are cold starts, so the retry lands on a warm instance.
+        // Retry only a transport failure: an HTTP status is the server
+        // answering, and a caller-cancelled call is already gone.
+        if (first?.httpStatus !== undefined || exec.signal?.aborted) throw first
+        data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse'), exec.signal)
+      }
     } catch (error) {
       const detail = error?.name === 'AbortError' ? 'request timed out' : (error?.message ?? 'network error')
       const tier = resolveTier()
