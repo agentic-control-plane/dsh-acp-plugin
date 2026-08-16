@@ -10,14 +10,41 @@ This is a native Cordis plugin on dsh's typed interception points, not a shell-h
 ## Install
 
 ```sh
+curl -sf https://agenticcontrolplane.com/install.sh | bash
+```
+
+That detects dsh, installs this plugin into every profile you have, opens your
+browser once to sign in, and saves the key to `~/.acp/credentials` — which the
+plugin reads on its own. There is no token to copy and nothing to export.
+
+<details>
+<summary>Manual install</summary>
+
+```sh
 dsh plugin --profile <your-profile> add dsh-plugin-acp
-export ACP_BEARER_TOKEN=gsk_...   # or keep it in ~/.acp/credentials
 dsh --profile <your-profile>
 ```
 
+Credentials come from `~/.acp/credentials` (written by the installer above) or
+from `ACP_BEARER_TOKEN` if you would rather set it yourself — useful on a
+headless box. Get a key at
+[cloud.agenticcontrolplane.com](https://cloud.agenticcontrolplane.com).
+
+Confirm the row actually mounted — installing the package and composing it into
+the profile are two different things:
+
+```sh
+dsh --profile <your-profile> --dump-config | grep dsh-plugin-acp
+```
+
+If it isn't there, add `dsh-plugin-acp` to that profile's `package.json`
+`"dsh.profile.bundles"` list.
+
+</details>
+
 No build step, no dependencies, plain ESM. Installing from git works too (`dsh plugin add github:agentic-control-plane/dsh-acp-plugin`) and needs no build allowance.
 
-Get a key at [cloud.agenticcontrolplane.com](https://cloud.agenticcontrolplane.com). No key? The plugin says so loudly and stays out of the way — it never bricks a session.
+No key? The plugin says so loudly and stays out of the way — it never bricks a session.
 
 ## Configuration
 
