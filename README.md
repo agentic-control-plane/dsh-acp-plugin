@@ -1,4 +1,4 @@
-# dsh-plugin-acp
+# @agenticcontrolplane/dsh
 
 [Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked against your policies before it runs, and every decision is recorded — what ran, what was blocked, and why.
 
@@ -21,7 +21,7 @@ plugin reads on its own. There is no token to copy and nothing to export.
 <summary>Manual install</summary>
 
 ```sh
-dsh plugin --profile <your-profile> add dsh-plugin-acp
+dsh plugin --profile <your-profile> add @agenticcontrolplane/dsh
 dsh --profile <your-profile>
 ```
 
@@ -34,10 +34,10 @@ Confirm the row actually mounted — installing the package and composing it int
 the profile are two different things:
 
 ```sh
-dsh --profile <your-profile> --dump-config | grep dsh-plugin-acp
+dsh --profile <your-profile> --dump-config | grep @agenticcontrolplane/dsh
 ```
 
-If it isn't there, add `dsh-plugin-acp` to that profile's `package.json`
+If it isn't there, add `@agenticcontrolplane/dsh` to that profile's `package.json`
 `"dsh.profile.bundles"` list.
 
 </details>
@@ -52,7 +52,7 @@ Override the row in your profile's `cordis.patch.yml`:
 
 ```yaml
 - id: acp
-  name: dsh-plugin-acp
+  name: @agenticcontrolplane/dsh
   config:
     governBase: https://govern.agenticcontrolplane.com  # or your self-hosted gateway
     agentTier: interactive   # default: interactive when an approval service is mounted, background otherwise

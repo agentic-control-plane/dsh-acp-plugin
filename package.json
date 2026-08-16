@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-acp",
+  "name": "@agenticcontrolplane/dsh",
   "version": "0.1.3",
   "description": "Agentic Control Plane for DeepSeek Harness — check every tool call against your policies before it runs, and keep a durable record of what was allowed and why.",
   "type": "module",
@@ -18,11 +18,17 @@
     "agent-security",
     "tool-call-policy"
   ],
-  "repository": "github:agentic-control-plane/dsh-acp-plugin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentic-control-plane/dsh-acp-plugin.git"
+  },
   "license": "MIT",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
