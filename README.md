@@ -4,6 +4,8 @@
 
 [Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked against your policies before it runs, and every decision is recorded — what ran, what was blocked, and why.
 
+> **Which ACP?** dsh also ships `packages/acp` in core — that one is [Zed's Agent Client Protocol](https://agentclientprotocol.com), the editor↔agent standard, published as [`@deepseek-ai/dsh-acp`](https://www.npmjs.com/package/@deepseek-ai/dsh-acp). Unrelated project, same acronym. If you're wiring dsh into Zed or the AI SDK, you want that one; this plugin decides whether each tool call *runs*. The full map: [agenticcontrolplane.com/acp-vs-acp](https://agenticcontrolplane.com/acp-vs-acp).
+
 ```text
 $ dsh --profile dev
 > refactor the auth module and clean up
@@ -89,7 +91,7 @@ In headless compositions with no approval service mounted, dsh itself resolves `
 
 ## Three things to know
 
-- dsh's `packages/acp` is Zed's Agent Client Protocol — an unrelated project that shares an acronym. This plugin is the Agentic Control Plane.
+- dsh's `packages/acp` is Zed's Agent Client Protocol — an unrelated project that shares an acronym. This plugin is the Agentic Control Plane. ([Which ACP is which](https://agenticcontrolplane.com/acp-vs-acp).)
 - Already running our Claude Code hook? dsh's `@deepseek-ai/dsh-hooks-claude-code` bridge runs an unmodified `hooks.json`, so `govern.mjs` works today with zero new code — deny and ask are honored, but input rewriting is not. This native plugin is the recommended path.
 - This package launched as `dsh-plugin-acp`; that name still installs but is deprecated. Same code — swap the name in your profile when convenient.
 
