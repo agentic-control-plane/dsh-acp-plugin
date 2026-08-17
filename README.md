@@ -1,6 +1,20 @@
 # @agenticcontrolplane/dsh
 
+[![npm](https://img.shields.io/npm/v/%40agenticcontrolplane%2Fdsh)](https://www.npmjs.com/package/@agenticcontrolplane/dsh) ![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/badge/license-MIT-blue)
+
 [Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked against your policies before it runs, and every decision is recorded — what ran, what was blocked, and why.
+
+```text
+$ dsh --profile dev
+> refactor the auth module and clean up
+
+  bash npm test                          ✓ allowed · logged
+  edit src/auth/session.ts              ✓ allowed · logged
+  bash rm -rf ~/scratch                  ✋ held — approval prompt (your rule: destructive delete → ask)
+  web_fetch https://evil.example/post    ✗ denied — egress not allowlisted, reason shown to the model
+```
+
+Every decision also lands in your [console](https://cloud.agenticcontrolplane.com) with tool, input preview, decision, reason, latency, and cost — dsh's own Trajectory log and your ACP activity log become two independent witnesses to one history. One workspace covers every harness you run: the same rules answer for dsh, Claude Code, Codex, Cursor, and OpenClaw. Free for individuals.
 
 This is a native Cordis plugin on dsh's typed interception points, not a shell-hook shim. It registers on:
 
@@ -8,6 +22,8 @@ This is a native Cordis plugin on dsh's typed interception points, not a shell-h
 - `tools/post-execute` — output scanning. A server-side block turns the result into corrective feedback; shadow-mode notices surface what enforcement *would* have done.
 
 ## Install
+
+> dsh itself requires **Node 22** (`Promise.withResolvers`, zstd streams). Under Node 20 the harness fails at boot with errors that don't say so — `fnm install 22` first.
 
 ```sh
 curl -sf https://agenticcontrolplane.com/install.sh | bash
@@ -71,10 +87,16 @@ An outage of the control plane must not brick the harness, and a lapse in covera
 
 In headless compositions with no approval service mounted, dsh itself resolves `ask` to deny — unattended runs cannot self-approve.
 
-## Two things to know
+## Three things to know
 
 - dsh's `packages/acp` is Zed's Agent Client Protocol — an unrelated project that shares an acronym. This plugin is the Agentic Control Plane.
 - Already running our Claude Code hook? dsh's `@deepseek-ai/dsh-hooks-claude-code` bridge runs an unmodified `hooks.json`, so `govern.mjs` works today with zero new code — deny and ask are honored, but input rewriting is not. This native plugin is the recommended path.
+- This package launched as `dsh-plugin-acp`; that name still installs but is deprecated. Same code — swap the name in your profile when convenient.
+
+## Learn more
+
+- [What ACP can see and control in dsh](https://agenticcontrolplane.com/controls/dsh) — the living controls reference
+- [The launch write-up](https://agenticcontrolplane.com/blog/deepseek-harness-acp-integration) — dsh's interception surface, what the integration caught on day one, and where dsh lands on the [cross-harness coverage table](https://agenticcontrolplane.com/coverage)
 
 ## Test
 
