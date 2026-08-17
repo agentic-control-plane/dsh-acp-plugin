@@ -28,7 +28,24 @@ import { join } from 'node:path'
 
 export const name = 'acp'
 
-export const PLUGIN_VERSION = '0.1.3'
+export const PLUGIN_VERSION = '0.1.4'
+
+/**
+ * Session-receipt contract (gatewaystack-connect#606, same one line as the
+ * Claude Code plugin's Stop hook): at session end, say how many calls ACP
+ * governed, anything it said along the way, and deep-link THIS session's
+ * timeline. Returns null when there is nothing to say — zero governed calls
+ * must produce zero receipt spam.
+ */
+export function buildReceiptMessage(stats, sessionId, consoleBase = 'https://cloud.agenticcontrolplane.com') {
+  if (!stats || !(stats.calls > 0)) return null
+  const parts = [`${stats.calls} tool call${stats.calls === 1 ? '' : 's'} governed`]
+  if (stats.denied > 0) parts.push(`${stats.denied} denied`)
+  if (stats.asked > 0) parts.push(`${stats.asked} held for approval`)
+  if (stats.notices > 0) parts.push(`${stats.notices} shadow notice${stats.notices === 1 ? '' : 's'}`)
+  const url = `${consoleBase}/sessions/${encodeURIComponent(String(sessionId))}`
+  return `[ACP] Session receipt: ${parts.join(' · ')} — review this session: ${url}`
+}
 
 /** 200 KB ceiling on tool output sent for post-hoc scanning (matches the backend). */
 const POST_HOOK_PAYLOAD_CEILING = 200 * 1024
@@ -93,6 +110,41 @@ export function apply(ctx, config = {}) {
     'Content-Type': 'application/json',
     'X-GS-Client': `dsh-plugin/${PLUGIN_VERSION}`,
   }
+
+  // --- Session receipt bookkeeping. In-memory per session id; a stats
+  // failure must never affect a call, so every touch is wrapped. ---
+  const sessionStats = new Map()
+  const statsFor = sid => {
+    if (!sid) return null
+    let s = sessionStats.get(sid)
+    if (!s) { s = { calls: 0, denied: 0, asked: 0, notices: 0 }; sessionStats.set(sid, s) }
+    return s
+  }
+  const bump = (exec, field) => {
+    try {
+      const s = statsFor(exec.agent?.session.header.id)
+      if (s) s[field] += 1
+    } catch { /* bookkeeping only */ }
+  }
+
+  ctx.on('agent/disposed', ({ agent }) => {
+    try {
+      const header = agent?.session?.header
+      if (!header?.id) return
+      const s = sessionStats.get(header.id)
+      sessionStats.delete(header.id)
+      if (!s) return
+      if (header.parentSession) {
+        // Subagent session: fold its counts into the parent so the main
+        // receipt covers the whole run — no per-subagent receipt noise.
+        const p = statsFor(header.parentSession)
+        if (p) for (const k of Object.keys(s)) p[k] += s[k]
+        return
+      }
+      const line = buildReceiptMessage(s, header.id, config.consoleBase ?? 'https://cloud.agenticcontrolplane.com')
+      if (line) ctx.logger.info(line)
+    } catch { /* the receipt is best-effort — never let it touch teardown */ }
+  })
 
   async function post(path, payload, signal) {
     const controller = new AbortController()
@@ -162,10 +214,13 @@ export function apply(ctx, config = {}) {
         reason: `[ACP] Gateway unreachable (${detail}) — ${tier} tier stays blocked when policy can't be consulted (fail-closed for unattended agents; interactive sessions fail open).`,
       }
     }
+    bump(exec, 'calls')
     if (data.decision === 'deny') {
+      bump(exec, 'denied')
       return { kind: 'deny', reason: `[ACP] Denied by policy: ${data.reason ?? 'policy did not return a reason'}` }
     }
     if (data.decision === 'ask') {
+      bump(exec, 'asked')
       return { kind: 'ask', reason: `[ACP] Approval required: ${data.reason ?? 'approval required'}` }
     }
     if (data.warning) ctx.logger.warn(String(data.warning))
@@ -209,6 +264,7 @@ export function apply(ctx, config = {}) {
     }
     if (typeof data.notice === 'string' && data.notice.trim() && !/^(off|0|false)$/i.test(process.env.ACP_SHADOW ?? '')) {
       // Shadow-mode counterfactual (#607): advisory, arrives with action "pass".
+      bump(exec, 'notices')
       ctx.logger.info(data.notice)
     }
     return next()

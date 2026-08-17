@@ -1,7 +1,7 @@
 {
   "name": "@agenticcontrolplane/dsh",
-  "version": "0.1.3",
-  "description": "Agentic Control Plane for DeepSeek Harness — check every tool call against your policies before it runs, and keep a durable record of what was allowed and why.",
+  "version": "0.1.4",
+  "description": "Agentic Control Plane for DeepSeek Harness \u2014 check every tool call against your policies before it runs, and keep a durable record of what was allowed and why.",
   "type": "module",
   "main": "index.js",
   "files": [
