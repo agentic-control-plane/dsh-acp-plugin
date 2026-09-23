@@ -1,0 +1,90 @@
+{
+  "corpus": "acp-plugin-conformance",
+  "version": 1,
+  "canonicalHome": "davidcrowe/gatewaystack-connect:conformance/plugin-corpus.json",
+  "tracking": "davidcrowe/gatewaystack-connect#1344 (L1 shared conformance corpus, build step 1)",
+  "purpose": "One table of plugin capabilities, run against EVERY ACP harness plugin through a thin per-plugin adapter. The adapter drives the plugin's real entry point against a fake gateway on 127.0.0.1 (or a stubbed fetch/urlopen where the repo already does that) and asserts on what the person would see or on what the plugin sent. Unit tests stayed green while four plugins dropped every gateway notice (#1334); this corpus is the seam test that would have caught it.",
+  "vendoring": "Each plugin vendors a byte-identical copy at test/fixtures/plugin-corpus.json (tests/fixtures/ for pytest repos). Its adapter pins the fingerprint below and fails when the copy differs. To change the corpus: edit this file, recompute the fingerprint, and update every plugin's copy and pin in the same change.",
+  "fingerprint": "sha256 of the raw file bytes, first 16 hex characters. Byte hashing (not a hash of a re-serialised object) so Node and Python compute the same value without agreeing on JSON serialisation.",
+  "divergences": "A plugin that fails a supported capability records it in its adapter's EXPECTED_DIVERGENCES list with the issue number. The adapter asserts the list exactly: a NEW failure fails CI, and a FIX also fails CI until the entry is removed. Neither can be quietly forgotten. A divergence is not a not-possible row: not-possible means the harness gives the plugin no way to do it.",
+  "marker": "ACPCONF7F3A",
+  "capabilities": {
+    "notice": {
+      "contract": "When the gateway's reply to POST /govern/tool-output contains notice: \"<text>\", that text reaches the person-visible channel of the harness (stdout systemMessage, stderr, a toast, a UI notify call, a logger the harness shows, or an editor protocol message). ACP_SHADOW=off silences it on the client side.",
+      "adapterMust": "Answer every other gateway path with an allow verdict. Isolate HOME (or the plugin's state dir) to a temp directory so first-per-session markers from the developer's machine cannot suppress the notice."
+    },
+    "post-tool": {
+      "contract": "Given the harness's NATIVE post-tool payload, the plugin's outgoing POST /govern/tool-output request body carries tool_name, tool_input, tool_output, session_id and hook_event_name \"PostToolUse\".",
+      "adapterMust": "Build the payload in the harness's own native shape (its own field names and tool name) from the canonical call below. Assert tool_name equals the native tool name the adapter fed in, or the plugin's documented canonical mapping of it (the adapter names that mapping explicitly)."
+    }
+  },
+  "cases": [
+    {
+      "id": "notice-shown",
+      "capability": "notice",
+      "env": {},
+      "gatewayReply": { "decision": "allow", "notice": "ACPCONF7F3A shadow mode: this call would have been held for review" },
+      "expect": { "personSees": true, "contains": "ACPCONF7F3A" },
+      "issue": "#1334",
+      "why": "Codex, OpenCode, Hermes and fx dropped every notice while their unit tests stayed green."
+    },
+    {
+      "id": "notice-shadow-off",
+      "capability": "notice",
+      "env": { "ACP_SHADOW": "off" },
+      "gatewayReply": { "decision": "allow", "notice": "ACPCONF7F3A shadow mode: this call would have been held for review" },
+      "expect": { "personSees": false, "contains": "ACPCONF7F3A" },
+      "issue": "#1334",
+      "why": "ACP_SHADOW=off is the client-side belt to the server's own shadow switch."
+    },
+    {
+      "id": "post-tool-fields",
+      "capability": "post-tool",
+      "env": {},
+      "call": {
+        "tool": "shell",
+        "command": "echo ACPCONF7F3A",
+        "output": "ACPCONF7F3A\n",
+        "sessionId": "acpconf-session-0001"
+      },
+      "gatewayReply": { "decision": "allow" },
+      "expect": {
+        "method": "POST",
+        "path": "/govern/tool-output",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "equals the native tool name fed in, or the adapter's declared canonical mapping",
+        "tool_input": "a JSON object whose serialisation contains the marker",
+        "tool_output": "a value whose serialisation contains the marker",
+        "session_id": "a non-empty string"
+      },
+      "issue": "#1344",
+      "why": "fx's post-tool call sends no tool_name or tool_input, so the gateway cannot scan or attribute the output."
+    }
+  ],
+  "harnesses": [
+    { "plugin": "claude-code-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "claude-code-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "codex-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "codex-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "opencode-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "opencode-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "hermes-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "hermes-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "pi-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "pi-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "grok-build-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "grok-build-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "antigravity-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "antigravity-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "openclaw-acp-plugin", "capability": "notice", "status": "not-possible", "reason": "OpenClaw exposes no after-tool hook to plugins, so the plugin never calls /govern/tool-output and has no reply to surface. Revisit when OpenClaw ships one." },
+    { "plugin": "openclaw-acp-plugin", "capability": "post-tool", "status": "not-possible", "reason": "OpenClaw exposes no after-tool hook to plugins, so there is no native post-tool payload to forward. Revisit when OpenClaw ships one." },
+    { "plugin": "dsh-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "dsh-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "fx-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "fx-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "muse-code-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "muse-code-acp-plugin", "capability": "post-tool", "status": "supported" },
+    { "plugin": "prime-agent-acp-plugin", "capability": "notice", "status": "supported" },
+    { "plugin": "prime-agent-acp-plugin", "capability": "post-tool", "status": "supported" }
+  ]
+}
