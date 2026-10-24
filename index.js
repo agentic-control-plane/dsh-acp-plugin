@@ -22,13 +22,13 @@
  * @module dsh-plugin-acp
  */
 
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 export const name = 'acp'
 
-export const PLUGIN_VERSION = '0.1.4'
+export const PLUGIN_VERSION = '0.1.5'
 
 /**
  * Session-receipt contract (gatewaystack-connect#606, same one line as the
@@ -73,6 +73,39 @@ function lapseLine(fields) {
       JSON.stringify({ at: new Date().toISOString(), client: 'dsh-plugin', ...fields }) + '\n',
     )
   } catch { /* the lapse log is best-effort — never block a call on it */ }
+}
+
+export const KEY_REJECTED_FIX =
+  "Fix: re-run the installer (curl -sf https://agenticcontrolplane.com/install.sh | bash) or create a key at https://cloud.agenticcontrolplane.com/settings/api-keys and save it: echo 'gsk_...' > ~/.acp/credentials"
+export const WORKSPACE_DELETED_FIX =
+  'The ACP workspace this machine was connected to has been deleted. To remove ACP from this machine: acp-uninstall (older installs without it: curl -sf https://agenticcontrolplane.com/uninstall.sh | bash). To keep using ACP, re-run the installer: curl -sf https://agenticcontrolplane.com/install.sh | bash'
+
+const DELETED_NOTICE_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * True the first time the workspace-deleted notice is asked for in a session,
+ * false after (marker ~/.acp/notices/workspace-deleted.<session>, created with
+ * the `wx` flag). With no session id, at most once per 24h via a timestamp
+ * marker. Fails toward showing: an unwritable marker repeats, never vanishes.
+ */
+export function firstDeletedNotice(sessionId, now = Date.now()) {
+  const dir = join(homedir(), '.acp', 'notices')
+  const id = String(sessionId ?? '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120)
+  try {
+    mkdirSync(dir, { recursive: true })
+    if (!id || id === 'unknown') {
+      const marker = join(dir, 'workspace-deleted.no-session')
+      let last = 0
+      try { last = Date.parse(readFileSync(marker, 'utf8').trim()) || 0 } catch { /* absent */ }
+      if (now - last < DELETED_NOTICE_WINDOW_MS) return false
+      writeFileSync(marker, new Date(now).toISOString())
+      return true
+    }
+    writeFileSync(join(dir, `workspace-deleted.${id}`), new Date(now).toISOString(), { flag: 'wx' })
+    return true
+  } catch (e) {
+    return e?.code !== 'EEXIST'
+  }
 }
 
 export function apply(ctx, config = {}) {
@@ -161,6 +194,11 @@ export function apply(ctx, config = {}) {
         // deepen the rate limit it is reporting.
         const err = new Error(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`)
         err.httpStatus = res.status
+        // A 4xx body may carry a machine-readable `code` (e.g. "workspace_deleted").
+        if (res.status >= 400 && res.status < 500) {
+          const body = await res.json().catch(() => null)
+          if (typeof body?.code === 'string') err.code = body.code
+        }
         throw err
       }
       return await res.json()
@@ -182,6 +220,29 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // A 401/403 is NOT the gateway being down — it is this machine's key being
+  // revoked, mistyped, or from a deleted workspace. Reading it as "gateway
+  // unreachable" left a user running ungoverned for hours believing it was our
+  // outage. Same tier posture as an outage (interactive fails open, unattended
+  // stays blocked), but the message names the cause and the fix. A 401 with
+  // `code: "workspace_deleted"` says once per session how to remove ACP, then
+  // proceeds silently. (gatewaystack-connect#1693, from claude-code-acp-plugin 0.29.3.)
+  function keyRejected(exec, next, status, code) {
+    const tier = resolveTier()
+    const deleted = code === 'workspace_deleted'
+    const fix = deleted ? WORKSPACE_DELETED_FIX : KEY_REJECTED_FIX
+    if (tier === 'interactive') {
+      lapseLine({ kind: 'UNGOVERNED', tool: exec.name, tier, detail: `key rejected (HTTP ${status})` })
+      if (deleted && !firstDeletedNotice(exec.agent?.session?.header?.id)) return next()
+      ctx.logger.warn(`[ACP] ⚠ KEY REJECTED (HTTP ${status}): the key in ~/.acp/credentials is revoked or invalid — this call proceeded UNGOVERNED and unlogged, and every call will until it is fixed. ${fix}`)
+      return next()
+    }
+    return {
+      kind: 'deny',
+      reason: `[ACP] Key rejected (HTTP ${status}) — the key in ~/.acp/credentials is revoked or invalid; ${tier} tier stays blocked until it is fixed. ${fix}`,
+    }
+  }
+
   // --- Pre-call policy check: the decision happens before the tool runs. ---
   ctx.on('tools/pre-execute', async (exec, next) => {
     let data
@@ -200,6 +261,9 @@ export function apply(ctx, config = {}) {
         data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse'), exec.signal)
       }
     } catch (error) {
+      if (error?.httpStatus === 401 || error?.httpStatus === 403) {
+        return keyRejected(exec, next, error.httpStatus, error.code)
+      }
       const detail = error?.name === 'AbortError' ? 'request timed out' : (error?.message ?? 'network error')
       const tier = resolveTier()
       if (tier === 'interactive') {
