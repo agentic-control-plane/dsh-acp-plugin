@@ -209,7 +209,7 @@ export function apply(ctx, config = {}) {
   }
 
   function checkPayload(exec, event) {
-    return {
+    const body = {
       tool_name: exec.name,
       tool_input: exec.arguments,
       session_id: exec.agent?.session.header.id,
@@ -218,6 +218,16 @@ export function apply(ctx, config = {}) {
       hook_event_name: event,
       agent_tier: resolveTier(),
     }
+    // #1518: PreToolUse only. The claim is the runtime fact itself (an
+    // approval service is mounted), never the config/env tier override. A
+    // {kind:'ask'} decision is resolved by that service, so native_ask is
+    // declared only when it is present.
+    if (event === 'PreToolUse') {
+      const claim = ctx.get('approval') !== undefined
+      body.attended = { claim, source: 'approval-service' }
+      if (claim) body.capabilities = ['native_ask']
+    }
+    return body
   }
 
   // A 401/403 is NOT the gateway being down — it is this machine's key being

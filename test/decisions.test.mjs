@@ -187,3 +187,44 @@ test('post-execute outage is silent pass-through (the call already ran)', async 
   assert.equal(decision.kind, 'accept')
   assert.equal(ctx.warnings.length, 0)
 })
+
+// --- #1518 attended signal -------------------------------------------------
+
+async function captureBodies(ctx, config, exec = EXEC) {
+  const bodies = []
+  const { server, base } = await stubGateway((url, body) => { bodies.push({ url, body }); return { json: { decision: 'allow' } } })
+  const l = mount(ctx, { governBase: base, ...config })
+  await l['tools/pre-execute'](exec, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](exec, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+  server.close()
+  return bodies
+}
+
+test('approval service mounted: attended claim true, approval-service source, native_ask', async () => {
+  const [pre] = await captureBodies(fakeCtx({ approval: {} }), {})
+  assert.deepEqual(pre.body.attended, { claim: true, source: 'approval-service' })
+  assert.deepEqual(pre.body.capabilities, ['native_ask'])
+})
+
+test('no approval service: claim false, no native_ask', async () => {
+  const [pre] = await captureBodies(fakeCtx(), {})
+  assert.deepEqual(pre.body.attended, { claim: false, source: 'approval-service' })
+  assert.equal(pre.body.capabilities, undefined)
+})
+
+test('a config/env tier override never sets the claim', async () => {
+  const [pre] = await captureBodies(fakeCtx(), { agentTier: 'interactive' })
+  assert.equal(pre.body.agent_tier, 'interactive')
+  assert.equal(pre.body.attended.claim, false)
+  const [pre2] = await captureBodies(fakeCtx({ approval: {} }), { agentTier: 'background' })
+  assert.equal(pre2.body.agent_tier, 'background')
+  assert.equal(pre2.body.attended.claim, true)
+})
+
+test('PostToolUse carries neither attended nor native_ask', async () => {
+  const bodies = await captureBodies(fakeCtx({ approval: {} }), {})
+  const post = bodies.find(b => b.url === '/govern/tool-output')
+  assert.ok(post)
+  assert.equal(post.body.attended, undefined)
+  assert.equal(post.body.capabilities, undefined)
+})
