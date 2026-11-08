@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40agenticcontrolplane%2Fdsh)](https://www.npmjs.com/package/@agenticcontrolplane/dsh) ![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/badge/license-MIT-blue)
 
-[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked against your policies and every decision is recorded: what ran, what was held, and why.
+[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. Ask works. Deny is reported to the agent but not yet enforced (see the note below).
 
 > **Deny is not enforced yet.** When a policy says `deny`, the plugin reports it to the agent with the reason, but it does not stop the call today (the fix is tracked). Until that ships, treat dsh as audit plus ask. See the [coverage matrix](https://agenticcontrolplane.com/coverage).
 
@@ -18,7 +18,7 @@ $ dsh --profile dev
   web_fetch https://evil.example/post    ✗ reported as denied: egress not allowlisted, reason shown to the model
 ```
 
-Every decision also lands in your [console](https://cloud.agenticcontrolplane.com) with tool, input preview, decision, reason, latency and cost. dsh's own Trajectory log and your ACP activity log are two independent records of the same history. One workspace covers every harness you run, so the same rules apply to dsh, Claude Code, Codex, Cursor and OpenClaw. Free for individuals.
+Every decision also lands in your [console](https://cloud.agenticcontrolplane.com) with tool, decision, reason and latency. dsh's own Trajectory log and your ACP activity log are two independent records of the same history. One workspace covers every harness you run, so the same rules apply to dsh, Claude Code, Codex, Cursor and OpenClaw (deny excepted, see the note above). Free for individuals.
 
 This is a native Cordis plugin on dsh's typed interception points, not a shell-hook shim. It registers on:
 
@@ -64,7 +64,7 @@ If it isn't there, add `@agenticcontrolplane/dsh` to that profile's `package.jso
 
 No build step, no dependencies, plain ESM. Installing from git works too (`dsh plugin add github:agentic-control-plane/dsh-acp-plugin`) and needs no build allowance.
 
-No key? The plugin says so loudly and stays out of the way. It never bricks a session.
+No key: the plugin prints a warning and lets the session run.
 
 ## Configuration
 
@@ -72,7 +72,7 @@ Override the row in your profile's `cordis.patch.yml`:
 
 ```yaml
 - id: acp
-  name: @agenticcontrolplane/dsh
+  name: "@agenticcontrolplane/dsh"
   config:
     governBase: https://govern.agenticcontrolplane.com  # or your self-hosted gateway
     agentTier: interactive   # default: interactive when an approval service is mounted, background otherwise
@@ -81,12 +81,12 @@ Override the row in your profile's `cordis.patch.yml`:
 
 `ACP_GOVERN_BASE`, `ACP_BEARER_TOKEN`, `ACP_AGENT_TIER`, and `ACP_SHADOW=off` work as environment variables too.
 
-## Failure posture
+## What happens if the gateway is down
 
-An outage of the control plane must not brick the harness, and a lapse in coverage must never be silent:
+If the gateway is down, dsh keeps working, and you are told the calls weren't checked:
 
 - **Interactive sessions fail open, loudly.** If the gateway is unreachable, the call proceeds, a `[ACP] ⚠ UNGOVERNED` warning is logged, and a line lands in `~/.acp/lapse.log`.
-- **Unattended agents fail closed.** With nobody watching, the block is the safety net.
+- **Unattended agents fail closed.** With nobody watching, a call that can't be checked is blocked.
 - This posture only covers the inability to *ask* the policy. It does not change how a `deny` is handled (see the note at the top).
 
 In headless compositions with no approval service mounted, dsh itself resolves `ask` to deny, so unattended runs cannot self-approve.
@@ -94,7 +94,7 @@ In headless compositions with no approval service mounted, dsh itself resolves `
 ## Notes
 
 - Already running our Claude Code hook? dsh's `@deepseek-ai/dsh-hooks-claude-code` bridge runs an unmodified `hooks.json`, so `govern.mjs` works today with zero new code. Input rewriting is not supported on that path. This native plugin is the recommended path.
-- This package launched as `dsh-plugin-acp`; that name still installs but is deprecated. Same code, so swap the name in your profile when convenient.
+- This package launched as `dsh-plugin-acp`; that name still installs but is deprecated. Same code, so swap the name in your profile when convenient. (The `cordis.patch.yml` in this repo still carries the old name.)
 
 ## Learn more
 
