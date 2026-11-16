@@ -221,10 +221,118 @@ test('a config/env tier override never sets the claim', async () => {
   assert.equal(pre2.body.attended.claim, true)
 })
 
-test('PostToolUse carries neither attended nor native_ask', async () => {
+test('PostToolUse carries neither attended nor native_ask (only output_rewrite)', async () => {
   const bodies = await captureBodies(fakeCtx({ approval: {} }), {})
   const post = bodies.find(b => b.url === '/govern/tool-output')
   assert.ok(post)
   assert.equal(post.body.attended, undefined)
-  assert.equal(post.body.capabilities, undefined)
+  // A text-only, untruncated result declares output_rewrite and nothing else.
+  assert.deepEqual(post.body.capabilities, ['output_rewrite'])
+})
+
+// --- PII redaction on tool output -------------------------------------------
+
+// Fake but realistic address, assembled so no literal sits in the fixture.
+const EMAIL = 'dana' + '@northwind-mail.net'
+const PII_NOTICE = '[ACP] Removed PII before the agent saw it: email.'
+const PII = { types: ['email'], count: 1, action: 'redacted', applied: true }
+const accept = async () => ({ kind: 'accept' })
+const textResult = text => ({ isError: false, content: [{ type: 'text', text }] })
+
+/** Mount against a stub that answers tool-output with `verdict`; records post bodies and info lines. */
+async function postScenario(verdict, status = 200) {
+  const seen = []
+  const { server, base } = await stubGateway((url, body) => {
+    if (url === '/govern/tool-output') { seen.push(body); return { status, json: verdict } }
+    return { json: { decision: 'allow' } }
+  })
+  const ctx = fakeCtx()
+  const infos = []
+  ctx.logger.info = m => infos.push(m)
+  const post = mount(ctx, { governBase: base })['tools/post-execute']
+  return { seen, infos, server, post }
+}
+
+test('redact via modified_tool_response: declares output_rewrite, model gets redacted text', async () => {
+  const { seen, server, post } = await postScenario({ action: 'redact', modified_tool_response: 'contact: [EMAIL]', pii: PII })
+  try {
+    const decision = await post(EXEC, textResult(`contact: ${EMAIL}`), accept)
+    assert.deepEqual(seen[0].capabilities, ['output_rewrite'])
+    assert.equal(seen[0].tool_output, `contact: ${EMAIL}`)
+    assert.equal(seen[0].tool_response, undefined, 'no tool_response is sent')
+    assert.equal(decision.kind, 'accept')
+    assert.deepEqual(decision.content, [{ type: 'text', text: 'contact: [EMAIL]' }])
+  } finally { server.close() }
+})
+
+test('redact via legacy modified_output: model gets redacted text', async () => {
+  const { server, post } = await postScenario({ action: 'redact', modified_output: 'contact: [EMAIL]', pii: PII })
+  try {
+    const decision = await post(EXEC, textResult(`contact: ${EMAIL}`), accept)
+    assert.deepEqual(decision.content, [{ type: 'text', text: 'contact: [EMAIL]' }])
+  } finally { server.close() }
+})
+
+test('non-text block: no capability declared, no rewrite', async () => {
+  const { seen, server, post } = await postScenario({
+    action: 'redact', modified_output: 'contact: [EMAIL]', pii: { ...PII, action: 'detected', applied: false },
+  })
+  try {
+    const result = {
+      isError: false,
+      content: [
+        { type: 'text', text: `contact: ${EMAIL}` },
+        { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+      ],
+    }
+    const decision = await post(EXEC, result, accept)
+    assert.equal(seen[0].capabilities, undefined)
+    assert.deepEqual(decision, { kind: 'accept' }, 'original (with image) passes through')
+  } finally { server.close() }
+})
+
+test('truncated output: no capability declared, no rewrite', async () => {
+  const { seen, server, post } = await postScenario({ action: 'redact', modified_output: 'x' })
+  try {
+    const decision = await post(EXEC, textResult(`${EMAIL} ` + 'a'.repeat(201 * 1024)), accept)
+    assert.equal(seen[0].capabilities, undefined)
+    assert.deepEqual(decision, { kind: 'accept' })
+  } finally { server.close() }
+})
+
+test('PII notice prints verbatim on redact, even with ACP_SHADOW=off', async () => {
+  process.env.ACP_SHADOW = 'off'
+  const { infos, server, post } = await postScenario({
+    action: 'redact', modified_tool_response: 'contact: [EMAIL]', pii: PII, notice: PII_NOTICE,
+  })
+  try {
+    await post(EXEC, textResult(`contact: ${EMAIL}`), accept)
+    assert.deepEqual(infos, [PII_NOTICE])
+  } finally { delete process.env.ACP_SHADOW; server.close() }
+})
+
+test('notice prints on block too', async () => {
+  const { infos, server, post } = await postScenario({ action: 'block', reason: 'pii', pii: PII, notice: PII_NOTICE })
+  try {
+    const decision = await post(EXEC, textResult(`contact: ${EMAIL}`), accept)
+    assert.equal(decision.kind, 'block')
+    assert.deepEqual(infos, [PII_NOTICE])
+  } finally { server.close() }
+})
+
+test('shadow notice on pass is still silenced by ACP_SHADOW=off', async () => {
+  process.env.ACP_SHADOW = 'off'
+  const { infos, server, post } = await postScenario({ action: 'pass', notice: '[ACP] shadow: would have asked' })
+  try {
+    await post(EXEC, textResult('ok'), accept)
+    assert.equal(infos.length, 0)
+  } finally { delete process.env.ACP_SHADOW; server.close() }
+})
+
+test('gateway error on tool-output: original passes through', async () => {
+  const { server, post } = await postScenario({ error: 'boom' }, 500)
+  try {
+    const decision = await post(EXEC, textResult(`contact: ${EMAIL}`), accept)
+    assert.deepEqual(decision, { kind: 'accept' })
+  } finally { server.close() }
 })
