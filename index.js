@@ -28,7 +28,7 @@ import { join } from 'node:path'
 
 export const name = 'acp'
 
-export const PLUGIN_VERSION = '0.1.5'
+export const PLUGIN_VERSION = '0.1.6'
 
 /**
  * Session-receipt contract (gatewaystack-connect#606, same one line as the
@@ -305,41 +305,67 @@ export function apply(ctx, config = {}) {
   // turns the result into corrective feedback the model sees. ---
   ctx.on('tools/post-execute', async (exec, result, next) => {
     let outputStr = ''
+    // Declare `output_rewrite` only when a text-only rewrite loses nothing:
+    // every block is text and the scan covered the whole output. Otherwise
+    // the gateway records "detected" and we must not rewrite.
+    let canRewrite = false
     try {
+      canRewrite = Array.isArray(result.content) && result.content.every(block => block?.type === 'text')
       outputStr = result.content
         .map(block => block.type === 'text' ? block.text : `[${block.type} content]`)
         .join('\n')
+      if (Buffer.byteLength(outputStr, 'utf8') > POST_HOOK_PAYLOAD_CEILING) {
+        outputStr = outputStr.slice(0, POST_HOOK_PAYLOAD_CEILING)
+        canRewrite = false
+      }
     } catch { return next() }
-    if (Buffer.byteLength(outputStr, 'utf8') > POST_HOOK_PAYLOAD_CEILING) {
-      outputStr = outputStr.slice(0, POST_HOOK_PAYLOAD_CEILING)
-    }
     let data
     try {
       data = await post('/govern/tool-output', {
         ...checkPayload(exec, 'PostToolUse'),
         tool_output: outputStr,
+        ...(canRewrite ? { capabilities: ['output_rewrite'] } : {}),
       }, exec.signal)
     } catch {
       // Post-hoc scanning is observability: silent pass-through, the call
       // already ran. The pre-call check is where unreachability gets loud.
       return next()
     }
-    if (data.action === 'block') {
-      return {
-        kind: 'block',
-        feedback: [{ type: 'text', text: `[ACP] Blocked: ${data.reason ?? 'policy'}` }],
+    // Decide without touching next(), so a failure here falls through to a
+    // single plain next() (fail open: the original output passes through).
+    let replacement
+    try {
+      const notice = typeof data?.notice === 'string' && data.notice.trim() ? data.notice : undefined
+      const isPii = data?.pii != null
+      if (data?.action === 'block') {
+        if (notice) ctx.logger.info(notice)
+        return {
+          kind: 'block',
+          feedback: [{ type: 'text', text: `[ACP] Blocked: ${data.reason ?? 'policy'}` }],
+        }
       }
+      if (data?.action === 'redact') {
+        if (notice) ctx.logger.info(notice)
+        const text = typeof data.modified_tool_response === 'string'
+          ? data.modified_tool_response
+          : typeof data.modified_output === 'string' ? data.modified_output : data.tool_output
+        // Rewrite only when declared; otherwise the gateway recorded
+        // "detected" and the original passes through to match that record.
+        if (canRewrite && typeof text === 'string') replacement = text
+      } else if (notice && (isPii || !/^(off|0|false)$/i.test(process.env.ACP_SHADOW ?? ''))) {
+        // PII notices always print; shadow-mode counterfactuals (#607) are
+        // advisory, arrive with action "pass", and honour ACP_SHADOW=off.
+        if (!isPii) bump(exec, 'notices')
+        ctx.logger.info(notice)
+      }
+    } catch {
+      replacement = undefined
     }
-    if (data.action === 'redact' && typeof data.tool_output === 'string') {
+    if (replacement !== undefined) {
       // DLP/ad-block rewrite: the model sees the transformed output.
-      return next().then(downstream => downstream.kind === 'accept' && downstream.content === undefined && downstream.value === undefined
-        ? { ...downstream, content: [{ type: 'text', text: data.tool_output }] }
+      return next().then(downstream => downstream?.kind === 'accept' && downstream.content === undefined && downstream.value === undefined
+        ? { ...downstream, content: [{ type: 'text', text: replacement }] }
         : downstream)
-    }
-    if (typeof data.notice === 'string' && data.notice.trim() && !/^(off|0|false)$/i.test(process.env.ACP_SHADOW ?? '')) {
-      // Shadow-mode counterfactual (#607): advisory, arrives with action "pass".
-      bump(exec, 'notices')
-      ctx.logger.info(data.notice)
     }
     return next()
   })
