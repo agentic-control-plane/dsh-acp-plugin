@@ -5,4 +5,4 @@
 # cordis.patch.yml to pin governBase, agentTier, or timeoutMs.
 - insert:
     - id: acp
-      name: dsh-plugin-acp
+      name: '@agenticcontrolplane/dsh'

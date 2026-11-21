@@ -19,7 +19,7 @@
  * the safety net. Policy denies are unaffected; this posture only covers the
  * inability to ASK the policy.
  *
- * @module dsh-plugin-acp
+ * @module @agenticcontrolplane/dsh
  */
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -247,14 +247,65 @@ export function apply(ctx, config = {}) {
       ctx.logger.warn(`[ACP] ⚠ KEY REJECTED (HTTP ${status}): the key in ~/.acp/credentials is revoked or invalid — this call proceeded UNGOVERNED and unlogged, and every call will until it is fixed. ${fix}`)
       return next()
     }
+    remember(deniedCalls, exec)
     return {
       kind: 'deny',
       reason: `[ACP] Key rejected (HTTP ${status}) — the key in ~/.acp/credentials is revoked or invalid; ${tier} tier stays blocked until it is fixed. ${fix}`,
     }
   }
 
+  // --- Did the tool body run? ---
+  // dsh sends a call that never ran (denied, approval declined, cancelled)
+  // through tools/post-execute anyway, carrying its own "Error: <reason>"
+  // text as the result. Reporting that as tool output made the gateway record
+  // "the tool ran after a deny" for calls the harness had in fact stopped
+  // (internal tracker), and would record a declined approval as approved.
+  //
+  // Three signals, each tied to this one call so that a miss can only ever
+  // send a report, never silently drop real output from scanning:
+  //   1. the plugin itself denied the call;
+  //   2. dsh's own "aborted before dispatch" result code;
+  //   3. the plugin asked, the result is an error, and the call never reached
+  //      tools/execute (dsh enters that hook only for a call it dispatches).
+  // A denial by a dsh guard or by another plugin is not ours to recognise and
+  // is still reported. Keys are session + call id, because providers reuse
+  // call ids. Bounded: a call that ends before post-execute is never removed.
+  const CALL_MEMORY_CAP = 512
+  const callKey = exec => {
+    const id = exec?.callId
+    if (typeof id !== 'string' || !id) return undefined
+    return `${exec.agent?.session?.header?.id ?? ''}:${id}`
+  }
+  const remember = (set, exec) => {
+    const key = callKey(exec)
+    if (!key) return
+    if (set.size >= CALL_MEMORY_CAP) set.delete(set.values().next().value)
+    set.add(key)
+  }
+  const deniedCalls = new Set()
+  const askedCalls = new Set()
+  const askedAndDispatched = new Set()
+  ctx.on('tools/execute', (exec, next) => {
+    if (askedCalls.has(callKey(exec))) remember(askedAndDispatched, exec)
+    return next()
+  })
+  /** True when the harness never ran this call's body. Clears the call's entries. */
+  function neverRan(exec, result) {
+    const key = callKey(exec)
+    const denied = key ? deniedCalls.delete(key) : false
+    const asked = key ? askedCalls.delete(key) : false
+    const dispatched = key ? askedAndDispatched.delete(key) : false
+    if (result?.error?.info?.code === 'ABORTED_BEFORE_DISPATCH') return true
+    if (denied) return true
+    return asked && !dispatched && result?.isError === true
+  }
+
   // --- Pre-call policy check: the decision happens before the tool runs. ---
   ctx.on('tools/pre-execute', async (exec, next) => {
+    // A call starts clean: an entry left by an earlier call with the same id
+    // (one that ended before post-execute) must not decide this one.
+    const startKey = callKey(exec)
+    if (startKey) { deniedCalls.delete(startKey); askedCalls.delete(startKey); askedAndDispatched.delete(startKey) }
     let data
     try {
       try {
@@ -283,6 +334,7 @@ export function apply(ctx, config = {}) {
         return next()
       }
       // Unattended tier: hold the line, say why honestly.
+      remember(deniedCalls, exec)
       return {
         kind: 'deny',
         reason: `[ACP] Gateway unreachable (${detail}) — ${tier} tier stays blocked when policy can't be consulted (fail-closed for unattended agents; interactive sessions fail open).`,
@@ -291,10 +343,12 @@ export function apply(ctx, config = {}) {
     bump(exec, 'calls')
     if (data.decision === 'deny') {
       bump(exec, 'denied')
+      remember(deniedCalls, exec)
       return { kind: 'deny', reason: `[ACP] Denied by policy: ${data.reason ?? 'policy did not return a reason'}` }
     }
     if (data.decision === 'ask') {
       bump(exec, 'asked')
+      remember(askedCalls, exec)
       return { kind: 'ask', reason: `[ACP] Approval required: ${data.reason ?? 'approval required'}` }
     }
     if (data.warning) ctx.logger.warn(String(data.warning))
@@ -304,6 +358,8 @@ export function apply(ctx, config = {}) {
   // --- Post-call audit: the result is reported for scanning; a server block
   // turns the result into corrective feedback the model sees. ---
   ctx.on('tools/post-execute', async (exec, result, next) => {
+    // Nothing ran, so there is no tool output to report or scan.
+    if (neverRan(exec, result)) return next()
     let outputStr = ''
     // Declare `output_rewrite` only when a text-only rewrite loses nothing:
     // every block is text and the scan covered the whole output. Otherwise
