@@ -94,7 +94,7 @@ In headless compositions with no approval service mounted, dsh itself resolves `
 ## Notes
 
 - Already running our Claude Code hook? dsh's `@deepseek-ai/dsh-hooks-claude-code` bridge runs an unmodified `hooks.json`, so `govern.mjs` works today with zero new code. Input rewriting is not supported on that path. This native plugin is the recommended path.
-- This package launched as `dsh-plugin-acp`; that name still installs but is deprecated. Same code, so swap the name in your profile when convenient. (The `cordis.patch.yml` in this repo still carries the old name.)
+- This package launched as `dsh-plugin-acp`; that name still installs but is deprecated. Same code, so swap the name in your profile when convenient.
 
 ## Learn more
 
