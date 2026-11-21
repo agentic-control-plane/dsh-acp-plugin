@@ -336,3 +336,157 @@ test('gateway error on tool-output: original passes through', async () => {
     assert.deepEqual(decision, { kind: 'accept' })
   } finally { server.close() }
 })
+
+// --- A call that never ran is not reported as tool output.
+// dsh routes a denied / declined / cancelled call through tools/post-execute
+// with its own "Error: <reason>" text; that is not output from the tool.
+
+/** Stub that records every request path and answers pre with `decision`. */
+async function recordingGateway(decision) {
+  const seen = []
+  const { server, base } = await stubGateway((url) => {
+    seen.push(url)
+    return url === '/govern/tool-use'
+      ? { json: { decision, reason: 'because' } }
+      : { json: { action: 'pass' } }
+  })
+  return { server, base, seen }
+}
+const exec = id => ({ ...EXEC, callId: id })
+const harnessDenial = reason => ({ content: [{ type: 'text', text: `Error: ${reason}` }], isError: true, error: { message: reason } })
+const posts = seen => seen.filter(u => u === '/govern/tool-output').length
+
+test('a denied call is not reported as tool output', async () => {
+  const { server, base, seen } = await recordingGateway('deny')
+  const l = mount(fakeCtx(), { governBase: base })
+  const e = exec('deny-1')
+  const d = await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
+  assert.equal(d.kind, 'deny')
+  const out = await l['tools/post-execute'](e, harnessDenial(d.reason), async () => ({ kind: 'accept' }))
+  assert.deepEqual(out, { kind: 'accept' })
+  assert.equal(posts(seen), 0)
+  server.close()
+})
+
+test('a fail-closed deny (gateway down, unattended) is not reported either', async () => {
+  const { server, base, seen } = await recordingGateway('allow')
+  const l = mount(fakeCtx(), { governBase: 'http://127.0.0.1:9', agentTier: 'background' })
+  const e = exec('down-1')
+  const d = await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
+  assert.equal(d.kind, 'deny')
+  // Point is the bookkeeping, not the transport: the post must not be attempted.
+  let nextCalls = 0
+  await l['tools/post-execute'](e, harnessDenial(d.reason), async () => { nextCalls++; return { kind: 'accept' } })
+  assert.equal(nextCalls, 1)
+  assert.equal(posts(seen), 0)
+  server.close()
+})
+
+test('an allowed call that the harness dispatched is reported', async () => {
+  const { server, base, seen } = await recordingGateway('allow')
+  const l = mount(fakeCtx(), { governBase: base })
+  const e = exec('run-1')
+  await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
+  await l['tools/execute'](e, async () => ({ content: [{ type: 'text', text: 'ok' }] }))
+  await l['tools/post-execute'](e, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  server.close()
+})
+
+test('an approved ask that ran is reported; a declined ask is not', async () => {
+  const { server, base, seen } = await recordingGateway('ask')
+  const l = mount(fakeCtx({ approval: {} }), { governBase: base })
+  const yes = exec('ask-yes')
+  assert.equal((await l['tools/pre-execute'](yes, async () => ({ kind: 'allow' }))).kind, 'ask')
+  await l['tools/execute'](yes, async () => ({ content: [{ type: 'text', text: 'pushed' }] }))
+  await l['tools/post-execute'](yes, { content: [{ type: 'text', text: 'pushed' }] }, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  const no = exec('ask-no')
+  await l['tools/pre-execute'](no, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](no, harnessDenial('approval declined'), async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  server.close()
+})
+
+test('a declined ask is not reported even before any call has been dispatched', async () => {
+  const { server, base, seen } = await recordingGateway('ask')
+  const l = mount(fakeCtx({ approval: {} }), { governBase: base })
+  const no = exec('ask-first')
+  await l['tools/pre-execute'](no, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](no, harnessDenial('approval declined'), async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 0)
+  server.close()
+})
+
+test('a call aborted before dispatch is not reported, even after tools/execute fired', async () => {
+  const { server, base, seen } = await recordingGateway('allow')
+  const l = mount(fakeCtx(), { governBase: base })
+  const e = exec('abort-1')
+  await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
+  // A later wrapper short-circuits on an aborted signal: the body never runs.
+  await l['tools/execute'](e, async () => ({ content: [] }))
+  const aborted = {
+    content: [{ type: 'text', text: 'Error: tool call aborted before dispatch' }],
+    isError: true,
+    error: { message: 'tool call aborted before dispatch', info: { name: 'AbortError', code: 'ABORTED_BEFORE_DISPATCH' } },
+  }
+  await l['tools/post-execute'](e, aborted, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 0)
+  server.close()
+})
+
+test('an approved ask whose tool then failed is still reported', async () => {
+  const { server, base, seen } = await recordingGateway('ask')
+  const l = mount(fakeCtx({ approval: {} }), { governBase: base })
+  const e = exec('ask-fail')
+  await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
+  await l['tools/execute'](e, async () => ({ content: [], isError: true }))
+  await l['tools/post-execute'](e, { content: [{ type: 'text', text: 'fatal: remote rejected' }], isError: true }, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  server.close()
+})
+
+test('an allowed call that errors without reaching tools/execute is still reported', async () => {
+  // A dsh guard or another plugin stopped it. Not ours to recognise; the
+  // rule is that a miss sends a report rather than dropping real output.
+  const { server, base, seen } = await recordingGateway('allow')
+  const l = mount(fakeCtx(), { governBase: base })
+  const ran = exec('mix-1')
+  await l['tools/pre-execute'](ran, async () => ({ kind: 'allow' }))
+  await l['tools/execute'](ran, async () => ({ content: [] }))
+  await l['tools/post-execute'](ran, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+  const other = exec('mix-2')
+  await l['tools/pre-execute'](other, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](other, harnessDenial('guard'), async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 2)
+  server.close()
+})
+
+test('a deny in one session does not hide a real call that reuses the call id in another', async () => {
+  let n = 0
+  const seen = []
+  const { server, base } = await stubGateway((url) => {
+    seen.push(url)
+    if (url !== '/govern/tool-use') return { json: { action: 'pass' } }
+    return { json: { decision: n++ === 0 ? 'deny' : 'allow', reason: 'because' } }
+  })
+  const l = mount(fakeCtx(), { governBase: base })
+  const inSession = sid => ({ ...EXEC, callId: 'call_0', agent: { session: { header: { id: sid, cwd: '/tmp' } } } })
+  // Denied in session A, and its post-execute never arrives (final-result path).
+  await l['tools/pre-execute'](inSession('A'), async () => ({ kind: 'allow' }))
+  const b = inSession('B')
+  await l['tools/pre-execute'](b, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](b, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  server.close()
+})
+
+test('a harness that never emits tools/execute still gets allowed calls reported', async () => {
+  const { server, base, seen } = await recordingGateway('allow')
+  const l = mount(fakeCtx(), { governBase: base })
+  const e = exec('old-1')
+  await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](e, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  server.close()
+})
