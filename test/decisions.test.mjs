@@ -490,3 +490,21 @@ test('a harness that never emits tools/execute still gets allowed calls reported
   assert.equal(posts(seen), 1)
   server.close()
 })
+
+test('a stale deny does not hide a later real call that reuses the id in the same session', async () => {
+  let n = 0
+  const seen = []
+  const { server, base } = await stubGateway((url) => {
+    seen.push(url)
+    if (url !== '/govern/tool-use') return { json: { action: 'pass' } }
+    return { json: { decision: n++ === 0 ? 'deny' : 'allow', reason: 'because' } }
+  })
+  const l = mount(fakeCtx(), { governBase: base })
+  // Denied, and its post-execute never arrives.
+  await l['tools/pre-execute'](exec('reused'), async () => ({ kind: 'allow' }))
+  const again = exec('reused')
+  await l['tools/pre-execute'](again, async () => ({ kind: 'allow' }))
+  await l['tools/post-execute'](again, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+  assert.equal(posts(seen), 1)
+  server.close()
+})

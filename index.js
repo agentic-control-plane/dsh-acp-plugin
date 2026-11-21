@@ -19,7 +19,7 @@
  * the safety net. Policy denies are unaffected; this posture only covers the
  * inability to ASK the policy.
  *
- * @module dsh-plugin-acp
+ * @module @agenticcontrolplane/dsh
  */
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -302,6 +302,10 @@ export function apply(ctx, config = {}) {
 
   // --- Pre-call policy check: the decision happens before the tool runs. ---
   ctx.on('tools/pre-execute', async (exec, next) => {
+    // A call starts clean: an entry left by an earlier call with the same id
+    // (one that ended before post-execute) must not decide this one.
+    const startKey = callKey(exec)
+    if (startKey) { deniedCalls.delete(startKey); askedCalls.delete(startKey); askedAndDispatched.delete(startKey) }
     let data
     try {
       try {
