@@ -13,19 +13,19 @@ $ dsh --profile dev
   bash npm test                          ✓ allowed · logged
   edit src/auth/session.ts              ✓ allowed · logged
   bash rm -rf ~/scratch                  ✋ held: approval prompt (your rule: destructive delete → ask)
-  web_fetch https://evil.example/post    ✗ reported as denied: egress not allowlisted, reason shown to the model
+  web_fetch https://evil.example/post    ✗ denied: egress not allowlisted, reason shown to the model
 ```
 
 Every decision also lands in your [console](https://cloud.agenticcontrolplane.com) with tool, decision, reason and latency. dsh's own Trajectory log and your ACP activity log are two independent records of the same history. One workspace covers every harness you run, so the same rules apply to dsh, Claude Code, Codex, Cursor and OpenClaw. Free for individuals.
 
 This is a native Cordis plugin on dsh's typed interception points, not a shell-hook shim. It registers on:
 
-- `tools/pre-execute`: the policy decision. `allow` lets the call through. `deny` stops the call before it is dispatched, and the agent receives the reason as the tool result. `ask` hands off to dsh's own approval flow.
+- `tools/pre-execute`: the policy decision. `allow` lets the call through. `deny` stops the call before it runs. The agent gets the reason back as the tool result. `ask` hands off to dsh's own approval flow.
 - `tools/post-execute`: output scanning. A server-side block turns the result into corrective feedback; shadow-mode notices surface what enforcement *would* have done.
 
 ## Install
 
-> dsh itself requires **Node 22** (`Promise.withResolvers`, zstd streams). Under Node 20 the harness fails at boot with errors that don't say so. Run `fnm install 22` first.
+> dsh itself requires **Node 24.9 or later**. On an older Node the harness fails at boot with errors that don't name the cause. Run `fnm install 24` first.
 
 ```sh
 curl -sf https://agenticcontrolplane.com/install.sh | bash
@@ -85,7 +85,8 @@ If the gateway is down, dsh keeps working, and you are told the calls weren't ch
 
 - **Interactive sessions fail open, loudly.** If the gateway is unreachable, the call proceeds, a `[ACP] ⚠ UNGOVERNED` warning is logged, and a line lands in `~/.acp/lapse.log`.
 - **Unattended agents fail closed.** With nobody watching, a call that can't be checked is blocked.
-- This posture only covers the inability to *ask* the policy. A `deny` the gateway did return always stops the call.
+- Both rules need a key. With no key the plugin warns and every call runs unchecked.
+- This only applies when the gateway can't be reached. If it answers `deny`, the call is stopped (checked on dsh 0.2.2-rc.1 with plugin 0.1.6).
 
 In headless compositions with no approval service mounted, dsh itself resolves `ask` to deny, so unattended runs cannot self-approve.
 
