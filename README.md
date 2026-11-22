@@ -2,9 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40agenticcontrolplane%2Fdsh)](https://www.npmjs.com/package/@agenticcontrolplane/dsh) ![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/badge/license-MIT-blue)
 
-[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. Ask works. Deny is reported to the agent but not yet enforced (see the note below).
-
-> **Deny is not enforced yet.** When a policy says `deny`, the plugin reports it to the agent with the reason, but it does not stop the call today (the fix is tracked). Until that ships, treat dsh as audit plus ask. See the [coverage matrix](https://agenticcontrolplane.com/coverage).
+[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. A denied call does not run, and the agent is told why. Ask hands off to dsh's own approval prompt.
 
 > **Which ACP?** dsh also ships `packages/acp` in core. That one is [Zed's Agent Client Protocol](https://agentclientprotocol.com), the editor↔agent standard, published as [`@deepseek-ai/dsh-acp`](https://www.npmjs.com/package/@deepseek-ai/dsh-acp). It is an unrelated project with the same acronym. If you're wiring dsh into Zed or the AI SDK, you want that one; this plugin checks each tool call against your policies. The full map: [agenticcontrolplane.com/acp-vs-acp](https://agenticcontrolplane.com/acp-vs-acp).
 
@@ -18,11 +16,11 @@ $ dsh --profile dev
   web_fetch https://evil.example/post    ✗ reported as denied: egress not allowlisted, reason shown to the model
 ```
 
-Every decision also lands in your [console](https://cloud.agenticcontrolplane.com) with tool, decision, reason and latency. dsh's own Trajectory log and your ACP activity log are two independent records of the same history. One workspace covers every harness you run, so the same rules apply to dsh, Claude Code, Codex, Cursor and OpenClaw (deny excepted, see the note above). Free for individuals.
+Every decision also lands in your [console](https://cloud.agenticcontrolplane.com) with tool, decision, reason and latency. dsh's own Trajectory log and your ACP activity log are two independent records of the same history. One workspace covers every harness you run, so the same rules apply to dsh, Claude Code, Codex, Cursor and OpenClaw. Free for individuals.
 
 This is a native Cordis plugin on dsh's typed interception points, not a shell-hook shim. It registers on:
 
-- `tools/pre-execute`: the policy decision. `allow` lets the call through. `deny` is reported to the agent with the reason, but the plugin does not stop the call yet. `ask` hands off to dsh's own approval flow.
+- `tools/pre-execute`: the policy decision. `allow` lets the call through. `deny` stops the call before it is dispatched, and the agent receives the reason as the tool result. `ask` hands off to dsh's own approval flow.
 - `tools/post-execute`: output scanning. A server-side block turns the result into corrective feedback; shadow-mode notices surface what enforcement *would* have done.
 
 ## Install
@@ -87,7 +85,7 @@ If the gateway is down, dsh keeps working, and you are told the calls weren't ch
 
 - **Interactive sessions fail open, loudly.** If the gateway is unreachable, the call proceeds, a `[ACP] ⚠ UNGOVERNED` warning is logged, and a line lands in `~/.acp/lapse.log`.
 - **Unattended agents fail closed.** With nobody watching, a call that can't be checked is blocked.
-- This posture only covers the inability to *ask* the policy. It does not change how a `deny` is handled (see the note at the top).
+- This posture only covers the inability to *ask* the policy. A `deny` the gateway did return always stops the call.
 
 In headless compositions with no approval service mounted, dsh itself resolves `ask` to deny, so unattended runs cannot self-approve.
 
