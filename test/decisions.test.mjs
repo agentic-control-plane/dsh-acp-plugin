@@ -5,6 +5,10 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { apply } from '../index.js'
 
+// The attended claim is false on a CI run; these tests pin the attended path,
+// so the runner's own CI variable must not decide them. (Own process per file.)
+delete process.env.CI
+
 /** Minimal Cordis-shaped ctx that captures listeners and log lines. */
 function fakeCtx({ approval } = {}) {
   const listeners = {}
@@ -59,8 +63,8 @@ test('policy deny maps to PreToolDecision deny with the reason', async () => {
 
 test('policy ask maps to PreToolDecision ask (dsh approval flow resolves it)', async () => {
   const { server, base } = await stubGateway(() => ({ json: { decision: 'ask', reason: 'needs review' } }))
-  const ctx = fakeCtx()
-  const pre = mount(ctx, { governBase: base })['tools/pre-execute']
+  const ctx = fakeCtx({ approval: {} })
+  const pre = mount(ctx, { governBase: base, ttyForTest: true })['tools/pre-execute']
   const decision = await pre(EXEC, async () => ({ kind: 'allow' }))
   assert.equal(decision.kind, 'ask')
   assert.match(decision.reason, /Approval required: needs review/)
@@ -201,22 +205,22 @@ async function captureBodies(ctx, config, exec = EXEC) {
 }
 
 test('approval service mounted: attended claim true, approval-service source, native_ask', async () => {
-  const [pre] = await captureBodies(fakeCtx({ approval: {} }), {})
-  assert.deepEqual(pre.body.attended, { claim: true, source: 'approval-service' })
+  const [pre] = await captureBodies(fakeCtx({ approval: {} }), { ttyForTest: true })
+  assert.deepEqual(pre.body.attended, { claim: true, source: 'approval-service', mode: 'tty' })
   assert.deepEqual(pre.body.capabilities, ['native_ask'])
 })
 
 test('no approval service: claim false, no native_ask', async () => {
-  const [pre] = await captureBodies(fakeCtx(), {})
-  assert.deepEqual(pre.body.attended, { claim: false, source: 'approval-service' })
+  const [pre] = await captureBodies(fakeCtx(), { ttyForTest: true })
+  assert.deepEqual(pre.body.attended, { claim: false, source: 'approval-service', mode: 'no-approval-service' })
   assert.equal(pre.body.capabilities, undefined)
 })
 
 test('a config/env tier override never sets the claim', async () => {
-  const [pre] = await captureBodies(fakeCtx(), { agentTier: 'interactive' })
+  const [pre] = await captureBodies(fakeCtx(), { agentTier: 'interactive', ttyForTest: true })
   assert.equal(pre.body.agent_tier, 'interactive')
   assert.equal(pre.body.attended.claim, false)
-  const [pre2] = await captureBodies(fakeCtx({ approval: {} }), { agentTier: 'background' })
+  const [pre2] = await captureBodies(fakeCtx({ approval: {} }), { agentTier: 'background', ttyForTest: true })
   assert.equal(pre2.body.agent_tier, 'background')
   assert.equal(pre2.body.attended.claim, true)
 })
@@ -395,7 +399,7 @@ test('an allowed call that the harness dispatched is reported', async () => {
 
 test('an approved ask that ran is reported; a declined ask is not', async () => {
   const { server, base, seen } = await recordingGateway('ask')
-  const l = mount(fakeCtx({ approval: {} }), { governBase: base })
+  const l = mount(fakeCtx({ approval: {} }), { governBase: base, ttyForTest: true })
   const yes = exec('ask-yes')
   assert.equal((await l['tools/pre-execute'](yes, async () => ({ kind: 'allow' }))).kind, 'ask')
   await l['tools/execute'](yes, async () => ({ content: [{ type: 'text', text: 'pushed' }] }))
@@ -410,7 +414,7 @@ test('an approved ask that ran is reported; a declined ask is not', async () => 
 
 test('a declined ask is not reported even before any call has been dispatched', async () => {
   const { server, base, seen } = await recordingGateway('ask')
-  const l = mount(fakeCtx({ approval: {} }), { governBase: base })
+  const l = mount(fakeCtx({ approval: {} }), { governBase: base, ttyForTest: true })
   const no = exec('ask-first')
   await l['tools/pre-execute'](no, async () => ({ kind: 'allow' }))
   await l['tools/post-execute'](no, harnessDenial('approval declined'), async () => ({ kind: 'accept' }))
@@ -437,7 +441,7 @@ test('a call aborted before dispatch is not reported, even after tools/execute f
 
 test('an approved ask whose tool then failed is still reported', async () => {
   const { server, base, seen } = await recordingGateway('ask')
-  const l = mount(fakeCtx({ approval: {} }), { governBase: base })
+  const l = mount(fakeCtx({ approval: {} }), { governBase: base, ttyForTest: true })
   const e = exec('ask-fail')
   await l['tools/pre-execute'](e, async () => ({ kind: 'allow' }))
   await l['tools/execute'](e, async () => ({ content: [], isError: true }))
