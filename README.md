@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40agenticcontrolplane%2Fdsh)](https://www.npmjs.com/package/@agenticcontrolplane/dsh) ![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/badge/license-MIT-blue)
 
-[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. A denied call does not run, and the agent is told why. Ask hands off to dsh's own approval prompt.
+[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. A denied call does not run, and the agent is told why. Ask hands off to dsh's own approval prompt when a person can answer it, and blocks the call otherwise.
 
 > **Which ACP?** dsh also ships `packages/acp` in core. That one is [Zed's Agent Client Protocol](https://agentclientprotocol.com), the editor↔agent standard, published as [`@deepseek-ai/dsh-acp`](https://www.npmjs.com/package/@deepseek-ai/dsh-acp). It is an unrelated project with the same acronym. If you're wiring dsh into Zed or the AI SDK, you want that one; this plugin checks each tool call against your policies. The full map: [agenticcontrolplane.com/acp-vs-acp](https://agenticcontrolplane.com/acp-vs-acp).
 
@@ -20,7 +20,7 @@ Every decision also lands in your [console](https://cloud.agenticcontrolplane.co
 
 This is a native Cordis plugin on dsh's typed interception points, not a shell-hook shim. It registers on:
 
-- `tools/pre-execute`: the policy decision. `allow` lets the call through. `deny` stops the call before it runs. The agent gets the reason back as the tool result. `ask` hands off to dsh's own approval flow.
+- `tools/pre-execute`: the policy decision. `allow` lets the call through. `deny` stops the call before it runs. The agent gets the reason back as the tool result. `ask` hands off to dsh's own approval flow when a person can answer it, and is blocked otherwise (see below).
 - `tools/post-execute`: output scanning. A server-side block turns the result into corrective feedback; shadow-mode notices surface what enforcement *would* have done.
 
 ## Install
@@ -88,7 +88,11 @@ If the gateway is down, dsh keeps working, and you are told the calls weren't ch
 - Both rules need a key. With no key the plugin warns and every call runs unchecked.
 - This only applies when the gateway can't be reached. If it answers `deny`, the call is stopped (checked on dsh 0.2.2-rc.1 with plugin 0.1.6).
 
-In headless compositions with no approval service mounted, dsh itself resolves `ask` to deny, so unattended runs cannot self-approve.
+## When you are asked and when a held call is blocked
+
+When a policy holds a call for approval, dsh's own approval prompt appears only if all three of these are true: the profile mounts dsh's approval service, dsh is running in a terminal (both stdin and stdout), and the `CI` environment variable is not set. The prompt shows the gateway's reason; approve and the call runs, decline and it does not.
+
+In every other case nobody can answer the prompt, so the held call is blocked instead. That covers a profile with no approval service, a piped or redirected run, and a CI run. The agent is told why it was blocked, along with the gateway's reason, and you can approve the call in the ACP console and run it again. Unattended runs therefore cannot self-approve.
 
 ## Notes
 

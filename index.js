@@ -8,9 +8,10 @@
  *
  * Decision mapping onto dsh's PreToolDecision:
  *   allow -> delegate to next()
- *   ask   -> { kind: 'ask', reason }  (dsh's own approval service resolves it;
- *            with no approval service mounted, dsh denies — headless runs
- *            fail closed on ask, which is the correct unattended posture)
+ *   ask   -> { kind: 'ask', reason }  when a person can answer: dsh's approval
+ *            service is mounted, stdin and stdout are terminals, and CI is
+ *            unset. Otherwise { kind: 'deny', reason } — nobody is there to
+ *            answer, so the held call is blocked and approved in the console.
  *   deny  -> { kind: 'deny', reason }
  *
  * Unreachability posture (gatewaystack-connect#385, never-brick): interactive
@@ -28,7 +29,7 @@ import { join } from 'node:path'
 
 export const name = 'acp'
 
-export const PLUGIN_VERSION = '0.1.6'
+export const PLUGIN_VERSION = '0.1.7'
 
 /**
  * Session-receipt contract (gatewaystack-connect#606, same one line as the
@@ -107,6 +108,38 @@ export function firstDeletedNotice(sessionId, now = Date.now()) {
     return e?.code !== 'EEXIST'
   }
 }
+
+// Test seam for the terminal check. Set only from code (the test files), never
+// from plugin config, so a profile cannot claim a terminal a run does not have.
+let terminalForTest
+/** Tests only: a boolean for both streams, `{ stdin, stdout }`, or undefined to read the real streams. */
+export function setTerminalForTest(override) {
+  terminalForTest = override
+}
+
+/**
+ * True when dsh's own stdin and stdout are both terminals (the plugin runs in
+ * the dsh process). `override` is a boolean for both streams, or
+ * `{ stdin, stdout }`. Any error while reading reports no terminal.
+ */
+export function hasTerminal(override = terminalForTest) {
+  try {
+    if (typeof override === 'boolean') return override
+    const tty = override ?? { stdin: process.stdin?.isTTY, stdout: process.stdout?.isTTY }
+    return tty.stdin === true && tty.stdout === true
+  } catch {
+    return false
+  }
+}
+
+/** Why dsh cannot ask a person, per `mode`, for the deny reason. */
+const NO_ASK_WHY = {
+  'no-approval-service': 'no approval service is mounted',
+  'no-tty': 'there is no terminal',
+  'ci': 'this is a CI run',
+}
+
+const ASK_PREFIX = 'ACP (Agentic Control Plane) asks: '
 
 export function apply(ctx, config = {}) {
   const govern = (
@@ -208,7 +241,18 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  function checkPayload(exec, event) {
+  // Can a person answer a {kind:'ask'} right now? Only when dsh's approval
+  // service is mounted, dsh has a terminal on both stdin and stdout, and the
+  // run is not CI. `mode` names the check that decided. Runtime facts only:
+  // the config/env tier override never sets the claim.
+  function attendance() {
+    if (ctx.get('approval') === undefined) return { claim: false, mode: 'no-approval-service' }
+    if (!hasTerminal()) return { claim: false, mode: 'no-tty' }
+    if (process.env.CI !== undefined && process.env.CI !== '') return { claim: false, mode: 'ci' }
+    return { claim: true, mode: 'tty' }
+  }
+
+  function checkPayload(exec, event, attended) {
     const body = {
       tool_name: exec.name,
       tool_input: exec.arguments,
@@ -218,13 +262,12 @@ export function apply(ctx, config = {}) {
       hook_event_name: event,
       agent_tier: resolveTier(),
     }
-    // #1518: PreToolUse only. The claim is the runtime fact itself (an
-    // approval service is mounted), never the config/env tier override. A
-    // {kind:'ask'} decision is resolved by that service, so native_ask is
-    // declared only when it is present.
+    // PreToolUse only. A {kind:'ask'} decision is resolved by dsh's
+    // approval service at the terminal, so native_ask is declared only when
+    // a person can actually answer there.
     if (event === 'PreToolUse') {
-      const claim = ctx.get('approval') !== undefined
-      body.attended = { claim, source: 'approval-service' }
+      const { claim, mode } = attended ?? attendance()
+      body.attended = { claim, source: 'approval-service', mode }
       if (claim) body.capabilities = ['native_ask']
     }
     return body
@@ -306,10 +349,12 @@ export function apply(ctx, config = {}) {
     // (one that ended before post-execute) must not decide this one.
     const startKey = callKey(exec)
     if (startKey) { deniedCalls.delete(startKey); askedCalls.delete(startKey); askedAndDispatched.delete(startKey) }
+    // Read once per call: the body's claim and the ask branch must agree.
+    const attended = attendance()
     let data
     try {
       try {
-        data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse'), exec.signal)
+        data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse', attended), exec.signal)
       } catch (first) {
         // Retry once before applying the fail posture (gatewaystack-connect#690).
         // A confirmed incident on the Claude Code plugin: the gateway answered
@@ -319,7 +364,7 @@ export function apply(ctx, config = {}) {
         // Retry only a transport failure: an HTTP status is the server
         // answering, and a caller-cancelled call is already gone.
         if (first?.httpStatus !== undefined || exec.signal?.aborted) throw first
-        data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse'), exec.signal)
+        data = await post('/govern/tool-use', checkPayload(exec, 'PreToolUse', attended), exec.signal)
       }
     } catch (error) {
       if (error?.httpStatus === 401 || error?.httpStatus === 403) {
@@ -348,8 +393,22 @@ export function apply(ctx, config = {}) {
     }
     if (data.decision === 'ask') {
       bump(exec, 'asked')
+      const gatewayReason = data.reason ?? 'approval required'
+      if (!attended.claim) {
+        // Nobody can answer dsh's prompt here, so the held call is blocked
+        // rather than handed to an ask nobody will see. The gateway reason is
+        // passed on unchanged (it may end with a console link).
+        remember(deniedCalls, exec)
+        return {
+          kind: 'deny',
+          reason: `[ACP] This call needs a person's approval and dsh cannot ask here (${NO_ASK_WHY[attended.mode]}), so it is blocked. Approve it in the ACP console, then run it again.\n\n${gatewayReason}`,
+        }
+      }
       remember(askedCalls, exec)
-      return { kind: 'ask', reason: `[ACP] Approval required: ${data.reason ?? 'approval required'}` }
+      const reason = typeof data.reason === 'string' && (data.reason.startsWith(ASK_PREFIX) || data.reason.startsWith('[ACP]'))
+        ? data.reason
+        : `[ACP] Approval required: ${gatewayReason}`
+      return { kind: 'ask', reason }
     }
     if (data.warning) ctx.logger.warn(String(data.warning))
     return next()
