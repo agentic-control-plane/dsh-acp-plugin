@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { apply, hasTerminal } from '../index.js'
+import { apply, hasTerminal, setTerminalForTest } from '../index.js'
 
 // Each case sets CI itself; the runner's own CI variable must not decide them.
 delete process.env.CI
@@ -46,12 +46,13 @@ const EXEC = {
 }
 
 /** Run one pre-execute (and a post-execute) against `verdict`; returns decision + bodies. */
-async function run({ approval, tty, ci, verdict = { decision: 'allow' } }) {
+async function run({ approval, tty, ci, verdict = { decision: 'allow' }, config = {} }) {
   const { server, seen, base } = await stubGateway(verdict)
   if (ci !== undefined) process.env.CI = ci
+  setTerminalForTest(tty)
   try {
     const ctx = fakeCtx({ approval })
-    apply(ctx, { token: 'gsk_test_token', timeoutMs: 500, governBase: base, ttyForTest: tty })
+    apply(ctx, { token: 'gsk_test_token', timeoutMs: 500, governBase: base, ...config })
     const decision = await ctx.listeners['tools/pre-execute'](EXEC, async () => ({ kind: 'allow' }))
     await ctx.listeners['tools/post-execute'](EXEC, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
     const pre = seen.find(s => s.url === '/govern/tool-use')?.body
@@ -59,6 +60,7 @@ async function run({ approval, tty, ci, verdict = { decision: 'allow' } }) {
     return { decision, pre, post }
   } finally {
     delete process.env.CI
+    setTerminalForTest(undefined)
     server.close()
   }
 }
@@ -89,12 +91,60 @@ test('CI run: claim false, mode ci, no native_ask', async () => {
   assert.ok(!(pre.capabilities ?? []).includes('native_ask'))
 })
 
+test('CI set to an empty string counts as unset', async () => {
+  const { pre } = await run({ approval: {}, tty: true, ci: '' })
+  assert.deepEqual(pre.attended, { claim: true, source: 'approval-service', mode: 'tty' })
+})
+
+test('CI=false still counts as a CI run (errs toward blocking)', async () => {
+  const { pre } = await run({ approval: {}, tty: true, ci: 'false' })
+  assert.equal(pre.attended.mode, 'ci')
+})
+
+test('plugin config cannot claim a terminal', async () => {
+  // A profile setting the old test key must not turn a no-terminal run into a claim.
+  const { pre, decision } = await run({
+    approval: {}, tty: false, config: { ttyForTest: true },
+    verdict: { decision: 'ask', reason: 'needs review' },
+  })
+  assert.deepEqual(pre.attended, { claim: false, source: 'approval-service', mode: 'no-tty' })
+  assert.equal(decision.kind, 'deny')
+})
+
 test('hasTerminal needs both streams to be TTYs', () => {
   assert.equal(hasTerminal(true), true)
   assert.equal(hasTerminal(false), false)
   assert.equal(hasTerminal({ stdin: true, stdout: true }), true)
   assert.equal(hasTerminal({ stdin: true, stdout: false }), false)
   assert.equal(hasTerminal({ stdin: undefined, stdout: true }), false)
+})
+
+test('hasTerminal fails closed when reading a stream throws', () => {
+  const broken = { get stdin() { throw new Error('bad stdio') }, stdout: true }
+  assert.equal(hasTerminal(broken), false)
+})
+
+test('a throwing terminal read denies the ask instead of escaping the hook', async () => {
+  const broken = { get stdin() { throw new Error('bad stdio') }, stdout: true }
+  const { pre, decision } = await run({ approval: {}, tty: broken, verdict: { decision: 'ask', reason: ASK_REASON } })
+  assert.equal(pre.attended.mode, 'no-tty')
+  assert.equal(decision.kind, 'deny')
+})
+
+test('post-execute does not read the terminal', async () => {
+  let reads = 0
+  const counting = { get stdin() { reads += 1; return true }, stdout: true }
+  const { server, base } = await stubGateway({ decision: 'allow' })
+  setTerminalForTest(counting)
+  try {
+    const ctx = fakeCtx({ approval: {} })
+    apply(ctx, { token: 'gsk_test_token', timeoutMs: 500, governBase: base })
+    await ctx.listeners['tools/post-execute'](EXEC, { content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept' }))
+    assert.equal(reads, 0)
+  } finally {
+    setTerminalForTest(undefined)
+    server.close()
+  }
 })
 
 const ASK_REASON = 'ACP (Agentic Control Plane) asks: run `echo probe`? Your rule: shell → ask. https://cloud.agenticcontrolplane.com/activity/abc?x=1&y=<2>'
@@ -107,6 +157,12 @@ test('ask with claim true: kind ask, gateway reason passed through unchanged', a
 test('ask with claim true: a reason without the ACP prefix keeps the old wording', async () => {
   const { decision } = await run({ approval: {}, tty: true, verdict: { decision: 'ask', reason: 'needs review' } })
   assert.deepEqual(decision, { kind: 'ask', reason: '[ACP] Approval required: needs review' })
+})
+
+test('ask with claim true: a reason starting with [ACP] is passed through unchanged', async () => {
+  const reason = '[ACP] Held: shell → ask. https://cloud.agenticcontrolplane.com/activity/abc'
+  const { decision } = await run({ approval: {}, tty: true, verdict: { decision: 'ask', reason } })
+  assert.deepEqual(decision, { kind: 'ask', reason })
 })
 
 test('ask with no terminal: deny that names why and carries the gateway reason unchanged', async () => {
@@ -137,14 +193,15 @@ test('ask with no approval service: deny that names the missing service', async 
 test('an ask turned into a deny is not reported as tool output', async () => {
   const { server, seen, base } = await stubGateway({ decision: 'ask', reason: ASK_REASON })
   try {
+    setTerminalForTest(false)
     const ctx = fakeCtx({ approval: {} })
-    apply(ctx, { token: 'gsk_test_token', timeoutMs: 500, governBase: base, ttyForTest: false })
+    apply(ctx, { token: 'gsk_test_token', timeoutMs: 500, governBase: base })
     const d = await ctx.listeners['tools/pre-execute'](EXEC, async () => ({ kind: 'allow' }))
     assert.equal(d.kind, 'deny')
     const denial = { content: [{ type: 'text', text: `Error: ${d.reason}` }], isError: true, error: { message: d.reason } }
     await ctx.listeners['tools/post-execute'](EXEC, denial, async () => ({ kind: 'accept' }))
     assert.equal(seen.filter(s => s.url === '/govern/tool-output').length, 0)
-  } finally { server.close() }
+  } finally { setTerminalForTest(undefined); server.close() }
 })
 
 test('PostToolUse carries neither attended nor native_ask', async () => {

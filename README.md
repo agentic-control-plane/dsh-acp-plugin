@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40agenticcontrolplane%2Fdsh)](https://www.npmjs.com/package/@agenticcontrolplane/dsh) ![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/badge/license-MIT-blue)
 
-[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. A denied call does not run, and the agent is told why. Ask hands off to dsh's own approval prompt.
+[Agentic Control Plane](https://agenticcontrolplane.com) for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): every tool call is checked and logged against your policies, recording what ran, what was held, and why. A denied call does not run, and the agent is told why. Ask hands off to dsh's own approval prompt when a person can answer it, and blocks the call otherwise.
 
 > **Which ACP?** dsh also ships `packages/acp` in core. That one is [Zed's Agent Client Protocol](https://agentclientprotocol.com), the editor↔agent standard, published as [`@deepseek-ai/dsh-acp`](https://www.npmjs.com/package/@deepseek-ai/dsh-acp). It is an unrelated project with the same acronym. If you're wiring dsh into Zed or the AI SDK, you want that one; this plugin checks each tool call against your policies. The full map: [agenticcontrolplane.com/acp-vs-acp](https://agenticcontrolplane.com/acp-vs-acp).
 

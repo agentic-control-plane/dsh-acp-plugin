@@ -109,15 +109,27 @@ export function firstDeletedNotice(sessionId, now = Date.now()) {
   }
 }
 
+// Test seam for the terminal check. Set only from code (the test files), never
+// from plugin config, so a profile cannot claim a terminal a run does not have.
+let terminalForTest
+/** Tests only: a boolean for both streams, `{ stdin, stdout }`, or undefined to read the real streams. */
+export function setTerminalForTest(override) {
+  terminalForTest = override
+}
+
 /**
  * True when dsh's own stdin and stdout are both terminals (the plugin runs in
- * the dsh process). `override` is a test hook: a boolean for both streams, or
- * `{ stdin, stdout }`.
+ * the dsh process). `override` is a boolean for both streams, or
+ * `{ stdin, stdout }`. Any error while reading reports no terminal.
  */
-export function hasTerminal(override) {
-  if (typeof override === 'boolean') return override
-  const tty = override ?? { stdin: process.stdin?.isTTY, stdout: process.stdout?.isTTY }
-  return tty.stdin === true && tty.stdout === true
+export function hasTerminal(override = terminalForTest) {
+  try {
+    if (typeof override === 'boolean') return override
+    const tty = override ?? { stdin: process.stdin?.isTTY, stdout: process.stdout?.isTTY }
+    return tty.stdin === true && tty.stdout === true
+  } catch {
+    return false
+  }
 }
 
 /** Why dsh cannot ask a person, per `mode`, for the deny reason. */
@@ -235,12 +247,12 @@ export function apply(ctx, config = {}) {
   // the config/env tier override never sets the claim.
   function attendance() {
     if (ctx.get('approval') === undefined) return { claim: false, mode: 'no-approval-service' }
-    if (!hasTerminal(config.ttyForTest)) return { claim: false, mode: 'no-tty' }
+    if (!hasTerminal()) return { claim: false, mode: 'no-tty' }
     if (process.env.CI !== undefined && process.env.CI !== '') return { claim: false, mode: 'ci' }
     return { claim: true, mode: 'tty' }
   }
 
-  function checkPayload(exec, event, attended = attendance()) {
+  function checkPayload(exec, event, attended) {
     const body = {
       tool_name: exec.name,
       tool_input: exec.arguments,
@@ -250,11 +262,11 @@ export function apply(ctx, config = {}) {
       hook_event_name: event,
       agent_tier: resolveTier(),
     }
-    // #1518: PreToolUse only. A {kind:'ask'} decision is resolved by dsh's
+    // PreToolUse only. A {kind:'ask'} decision is resolved by dsh's
     // approval service at the terminal, so native_ask is declared only when
     // a person can actually answer there.
     if (event === 'PreToolUse') {
-      const { claim, mode } = attended
+      const { claim, mode } = attended ?? attendance()
       body.attended = { claim, source: 'approval-service', mode }
       if (claim) body.capabilities = ['native_ask']
     }
